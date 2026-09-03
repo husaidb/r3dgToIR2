@@ -1,0 +1,11 @@
+{
+    "chair": {
+        "path": "output/NeRF_Syn/chair/neilf/point_cloud/iteration_40000/point_cloud.ply",
+        "transform": [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0
+        ]
+    }
+}
