@@ -275,7 +275,7 @@ def calculate_loss(viewpoint_camera, pc, results, opt, direct_light_env_light):
 
     lambda_emission_constraint = getattr(opt, "lambda_emission_constraint", 0.0)
     if (lambda_emission_constraint > 0) and (rendered_emission is not None):
-        emission_clamped = rendered_emission.clamp(0.6, 0.8)
+        emission_clamped = rendered_emission.clamp(0.6, 0.9)
         loss_emission_constraint = F.l1_loss(rendered_emission, emission_clamped)
         tb_dict["loss_emission_constraint"] = loss_emission_constraint.item()
         loss = loss + lambda_emission_constraint * loss_emission_constraint
