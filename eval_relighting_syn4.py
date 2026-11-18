@@ -40,6 +40,7 @@ if __name__ == '__main__':
                         help="If set, use it as background color")
     parser.add_argument("--temperature", type=float, default=25.0, help="Object temperature in Celsius for rendering.")
     parser.add_argument("--emissivity", type=float, default=0.95, help="Object emissivity for MWIR rendering.")
+    parser.add_argument("--emissivity_mode", choices=["external", "auto", "analytic", "lut"], default="external")
     # 中文注释：MWIR 发射率参数，用于在 neilf 的 PBR 方程中加入热辐射项
     args = get_combined_args(parser)
     dataset = model.extract(args)
@@ -94,7 +95,9 @@ if __name__ == '__main__':
                 "env_light": light,
                 "sample_num": args.sample_num,
                 "object_temperature": args.temperature,
-                "emissivity": args.emissivity,
+                # 中文注释：external 模式才使用固定发射率，其余模式由材质现算
+                "emissivity": args.emissivity if args.emissivity_mode == "external" else None,
+                "emissivity_mode": args.emissivity_mode,
                 # 中文注释：可选热辐射尺度参数（默认 1e-8），需要时可启用：
                 # "thermal_scale": 1e-8,
             },

@@ -72,8 +72,8 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
             pbr_kwargs["env_light"] = direct_env_light
             if args.temperature is not None:
                 pbr_kwargs["object_temperature"] = args.temperature
-            if getattr(args, "emissivity_mode", "external") == "auto":
-                pbr_kwargs["emissivity_mode"] = "auto"
+            if args.emissivity_mode != "external":
+                pbr_kwargs["emissivity_mode"] = args.emissivity_mode
             elif args.emissivity is not None:
                 pbr_kwargs["emissivity"] = args.emissivity
 
@@ -403,7 +403,7 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--checkpoint", type=str, default=None)
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--emissivity", type=float, default=None)
-    parser.add_argument("--emissivity_mode", choices=["external", "auto"], default="external")
+    parser.add_argument("--emissivity_mode", choices=["external", "auto", "analytic", "lut"], default="external")
     args = parser.parse_args(sys.argv[1:])
     print(f"Current model path: {args.model_path}")
     print(f"Current rendering type:  {args.type}")

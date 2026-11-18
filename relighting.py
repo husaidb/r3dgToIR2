@@ -94,7 +94,7 @@ if __name__ == '__main__':
     parser.add_argument('--envmap_path', type=str, default=None, help="(Optional) Path to a new environment map (.hdr) for re-lighting. If not provided, uses the original light from the checkpoint.")
     parser.add_argument('--temperature', type=float, default=25.0, help="Object temperature in Celsius for rendering.")
     parser.add_argument('--emissivity', type=float, default=0.95, help="Object emissivity for MWIR rendering.")
-    parser.add_argument('--emissivity_mode', choices=["external", "auto"], default="external")
+    parser.add_argument('--emissivity_mode', choices=["external", "auto", "analytic", "lut"], default="external")
     parser.add_argument('-bg', "--background_color", type=float, default=None,
                         help="If set, use it as background color")
     parser.add_argument('--bake', action='store_true', default=False, help="Bake the visibility and refine.")
