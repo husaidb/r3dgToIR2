@@ -42,6 +42,9 @@ if __name__ == '__main__':
     parser.add_argument("--emissivity", type=float, default=0.95, help="Object emissivity for MWIR rendering.")
     parser.add_argument("--emissivity_mode", choices=["external", "auto", "analytic", "lut"], default="external")
     # 中文注释：MWIR 发射率参数，用于在 neilf 的 PBR 方程中加入热辐射项
+    parser.add_argument("--material_prob_path", type=str, default="")
+    parser.add_argument("--metallic", type=float, default=0.0)
+    parser.add_argument("--base_color_scale", type=float, nargs=3, default=None)
     args = get_combined_args(parser)
     dataset = model.extract(args)
     pipe = pipeline.extract(args)
@@ -98,12 +101,20 @@ if __name__ == '__main__':
                 # 中文注释：external 模式才使用固定发射率，其余模式由材质现算
                 "emissivity": args.emissivity if args.emissivity_mode == "external" else None,
                 "emissivity_mode": args.emissivity_mode,
+                "metallic": args.metallic,
                 # 中文注释：可选热辐射尺度参数（默认 1e-8），需要时可启用：
                 # "thermal_scale": 1e-8,
             },
         }
-        
-        if "/air_baloons/" in args.model_path:
+
+        if args.material_prob_path:
+            render_kwargs["dict_params"]["metal_prob"] = torch.from_numpy(
+                np.load(args.material_prob_path)).float().cuda()
+
+        if args.base_color_scale is not None:
+            gaussians.base_color_scale = torch.tensor(
+                args.base_color_scale, dtype=torch.float32, device="cuda")
+        elif "/air_baloons/" in args.model_path:
             gaussians.base_color_scale = torch.tensor([1.3746, 0.6428, 0.7279], dtype=torch.float32, device="cuda")
         elif "/chair/" in args.model_path:
             gaussians.base_color_scale = torch.tensor([1.8865, 1.9675, 1.7410], dtype=torch.float32, device="cuda")
