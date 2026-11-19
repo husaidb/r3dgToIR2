@@ -10,6 +10,7 @@ expressions are what is tested -- not a transcription of them.
 
 import os
 import textwrap
+import types
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -61,6 +62,30 @@ EMISSIVITY_SRC = _slice("rendering_equation",
 # compile now so a broken extraction fails loudly up front (exec happens in run_shipped)
 METALLIC_CODE = compile(METALLIC_SRC, NEILF, "exec")
 EMISSIVITY_CODE = compile(EMISSIVITY_SRC, NEILF, "exec")
+
+# --- Extract project_points from script/prepare_object_metalness.py (importing it
+# pulls in CUDA modules). Anchor: "def project_points(" up to the next top-level def.
+PROJ_SCRIPT = os.path.join(ROOT, "script", "prepare_object_metalness.py")
+psrc = open(PROJ_SCRIPT, encoding="utf-8").read()
+pslines = psrc.splitlines()
+pstart = None
+for _i, _l in enumerate(pslines):
+    if _l.startswith("def project_points("):
+        pstart = _i
+        break
+if pstart is None:
+    raise RuntimeError(
+        "prepare_object_metalness.py extraction anchor missing: 'def project_points(' -- "
+        "update _test_l2.py anchors")
+pend = len(pslines)
+for _j in range(pstart + 1, len(pslines)):
+    if pslines[_j].startswith("def "):
+        pend = _j
+        break
+PROJECT_POINTS_CODE = compile("\n".join(pslines[pstart:pend]) + "\n", PROJ_SCRIPT, "exec")
+pns = {"torch": torch}
+exec(PROJECT_POINTS_CODE, pns)
+project_points = pns["project_points"]
 
 
 def run_shipped(base_color, roughness, metallic, emissivity_mode):
@@ -168,6 +193,26 @@ for bc in bcs:
             if flag == "FAIL":
                 print("    (eps==1-rho:%s  analytic@A=1:B=0:%s)"
                       % ("OK" if ok_eps else "FAIL", "OK" if ok4 else "FAIL"))
+
+# --- Test 5: project_points perspective divide (regression for the Critical bug) ----
+# A camera at the origin looking down +z, identity w2c, fx=fy=100, cx=50, cy=40.
+_cam = types.SimpleNamespace()
+_cam.world_view_transform = torch.eye(4)
+_cam.intrinsics = torch.tensor([[100., 0., 50.],
+                                [0., 100., 40.],
+                                [0., 0., 1.]])
+# (world point, expected u, expected v). The (1, 0.5, 2) case discriminates: a divide
+# by 1 (missing perspective divide) yields (150, 90) instead of (100, 65).
+for _x, _y, _z, _eu, _ev in [(0., 0., 2., 50., 40.),
+                             (1., 0.5, 2., 100., 65.),
+                             (0., 0., 0.5, 50., 40.)]:
+    _u, _v, _zc = project_points(torch.tensor([[_x, _y, _z]]), _cam)
+    _ok = (abs(_u[0].item() - _eu) < 1e-4 and abs(_v[0].item() - _ev) < 1e-4
+           and abs(_zc[0].item() - _z) < 1e-6)
+    fail += not _ok
+    print("Test5 project (%g,%g,%g): u=%.4f v=%.4f z=%.4f  %s"
+          % (_x, _y, _z, _u[0].item(), _v[0].item(), _zc[0].item(),
+             "OK" if _ok else "FAIL"))
 
 print("\nFAILURES:", fail)
 if fail:

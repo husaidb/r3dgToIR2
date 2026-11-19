@@ -41,12 +41,13 @@ def load_foreground_mask(path, height, width):
 
 
 def project_points(xyz, cam):
-    """返回像素坐标 u,v 与相机坐标 z。与 neilf.py 的约定一致。"""
+    """返回像素坐标 u,v 与相机坐标 z。与 relighting.py 的 render_points 约定一致。"""
     xyz_h = torch.cat([xyz, torch.ones_like(xyz[:, :1])], dim=-1)
-    z = (xyz_h @ cam.world_view_transform)[:, 2]
-    uv = xyz_h @ cam.proj_matrix.T          # proj_matrix = K @ E
-    u = uv[:, 0] / uv[:, 3].clamp_min(1e-8)
-    v = uv[:, 1] / uv[:, 3].clamp_min(1e-8)
+    xyz_cam = xyz_h @ cam.world_view_transform            # [N,4]（world_view_transform 已是转置后的 w2c）
+    z = xyz_cam[:, 2]
+    uv_h = xyz_cam[:, :3] @ cam.intrinsics.T              # [N,3]：(u*z, v*z, z)
+    u = uv_h[:, 0] / uv_h[:, 2].clamp_min(1e-8)
+    v = uv_h[:, 1] / uv_h[:, 2].clamp_min(1e-8)
     return u, v, z
 
 
