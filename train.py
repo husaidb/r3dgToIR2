@@ -76,6 +76,11 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
                 pbr_kwargs["emissivity_mode"] = args.emissivity_mode
             elif args.emissivity is not None:
                 pbr_kwargs["emissivity"] = args.emissivity
+            if getattr(args, "material_prob_path", ""):
+                pbr_kwargs["metal_prob"] = torch.from_numpy(
+                    np.load(args.material_prob_path)).float().cuda()
+            pbr_kwargs["metallic"] = getattr(args, "metallic", 0.0)
+            pbr_kwargs["metallic_from_model"] = getattr(args, "metallic_from_model", False)
 
     """ Prepare render function and bg"""
     render_fn = render_fn_dict[args.type]
