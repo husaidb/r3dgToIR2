@@ -98,7 +98,7 @@ def render_view(viewpoint_camera: Camera, pc: GaussianModel, pipe, bg_color: tor
         assert metal_prob.shape[0] == N, \
             f"metal_prob length {metal_prob.shape[0]} != num gaussians {N}; " \
             f"checkpoint/mask mismatch or densification is on"
-        metallic = metal_prob.to(base_color.device, base_color.dtype).view(N, 1)
+        metallic = metal_prob.to(base_color.device, base_color.dtype).reshape(N, 1)
     else:
         metallic = torch.full((N, 1), float(dict_params.get("metallic", 0.0)),
                               device=base_color.device, dtype=base_color.dtype)
