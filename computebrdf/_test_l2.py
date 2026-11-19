@@ -202,7 +202,7 @@ _cam.intrinsics = torch.tensor([[100., 0., 50.],
                                 [0., 100., 40.],
                                 [0., 0., 1.]])
 # (world point, expected u, expected v). The (1, 0.5, 2) case discriminates: a divide
-# by 1 (missing perspective divide) yields (150, 90) instead of (100, 65).
+# by 1 (missing perspective divide) yields (200, 130) instead of (100, 65).
 for _x, _y, _z, _eu, _ev in [(0., 0., 2., 50., 40.),
                              (1., 0.5, 2., 100., 65.),
                              (0., 0., 0.5, 50., 40.)]:
