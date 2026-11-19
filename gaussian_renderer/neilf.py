@@ -90,6 +90,18 @@ def render_view(viewpoint_camera: Camera, pc: GaussianModel, pipe, bg_color: tor
         colors_precomp = override_color
 
     base_color = pc.get_base_color
+    N = means3D.shape[0]
+    if dict_params.get("metallic_from_model", False) and getattr(pc, "use_pbr", False):
+        metallic = pc.get_metalness.view(N, 1)
+    elif dict_params.get("metal_prob", None) is not None:
+        metal_prob = dict_params["metal_prob"]
+        assert metal_prob.shape[0] == N, \
+            f"metal_prob length {metal_prob.shape[0]} != num gaussians {N}; " \
+            f"checkpoint/mask mismatch or densification is on"
+        metallic = metal_prob.to(base_color.device, base_color.dtype).view(N, 1)
+    else:
+        metallic = torch.full((N, 1), float(dict_params.get("metallic", 0.0)),
+                              device=base_color.device, dtype=base_color.dtype)
     roughness = pc.get_roughness
     normal = pc.get_normal
     incidents = pc.get_incidents  # incident shs
@@ -103,7 +115,7 @@ def render_view(viewpoint_camera: Camera, pc: GaussianModel, pipe, bg_color: tor
             base_color, roughness, normal.detach(), viewdirs, incidents,
             direct_light_env_light, visibility_precompute=pc._visibility_tracing, 
             object_temperature=object_temperature, emissivity=emissivity, thermal_scale=thermal_scale, emissivity_mode=emissivity_mode,
-            incident_dirs_precompute=pc._incident_dirs, incident_areas_precompute=pc._incident_areas)
+            incident_dirs_precompute=pc._incident_dirs, incident_areas_precompute=pc._incident_areas, metallic=metallic)
     else:
         chunk_size = 100000
         brdf_color = []
@@ -116,7 +128,8 @@ def render_view(viewpoint_camera: Camera, pc: GaussianModel, pipe, bg_color: tor
                 object_temperature=object_temperature, emissivity=emissivity, thermal_scale=thermal_scale, emissivity_mode=emissivity_mode,
                 visibility_precompute=pc._visibility_tracing[i:i + chunk_size], 
                 incident_dirs_precompute=pc._incident_dirs[i:i + chunk_size], 
-                incident_areas_precompute=pc._incident_areas[i:i + chunk_size])
+                incident_areas_precompute=pc._incident_areas[i:i + chunk_size],
+                metallic=metallic[i:i + chunk_size])
             brdf_color.append(_brdf_color)
             extra_results.append(_extra_results)
         brdf_color = torch.cat(brdf_color, dim=0)
@@ -418,7 +431,8 @@ def lookup_spec_ab(roughness, ndv):
 def rendering_equation(base_color, roughness, normals, viewdirs,
                               incidents, direct_light_env_light=None,
                               visibility_precompute=None, incident_dirs_precompute=None, incident_areas_precompute=None,
-                              object_temperature=None, emissivity=None, thermal_scale=1e-8, emissivity_mode="external"):
+                              object_temperature=None, emissivity=None, thermal_scale=1e-8, emissivity_mode="external",
+                              metallic=None):
     incident_dirs, incident_areas = incident_dirs_precompute, incident_areas_precompute
 
     deg = int(np.sqrt(incidents.shape[1]) - 1)
@@ -439,8 +453,11 @@ def rendering_equation(base_color, roughness, normals, viewdirs,
     #rho = 0.5
     # 或者f_d = (rho * base_color[:, None]) / np.pi
     #除以pi是因为我们假设漫反射率是与入射角度无关的常数，而不是与入射角度相关的函数
-    f_d = base_color[:, None] / np.pi
-    f_s = GGX_specular(normals, viewdirs, incident_dirs, roughness, fresnel=0.04)
+    if metallic is None:
+        metallic = torch.zeros_like(base_color[:, :1])
+    F0 = 0.04 * (1 - metallic) + base_color * metallic      # [N,3]
+    f_d = (base_color * (1 - metallic))[:, None] / np.pi    # [N,1,3]
+    f_s = GGX_specular(normals, viewdirs, incident_dirs, roughness, fresnel=F0)
 
     transport = incident_lights * incident_areas * n_d_i  # （num_pts, num_sample, 3)
     specular = ((f_s) * transport).mean(dim=-2)
@@ -453,12 +470,12 @@ def rendering_equation(base_color, roughness, normals, viewdirs,
     eps = None
     if emissivity_mode == "analytic" and emissivity is None:
         # 集总近似：漫反射率取 base_color，镜面反射率直接取 F0=0.04，忽略粗糙度与视角
-        rho = (base_color + 0.04).clamp(0, 1)
+        rho = (base_color + 0.04 * (1 - metallic)).clamp(0, 1)
         eps = 1.0 - rho
     elif emissivity_mode == "lut" and emissivity is None:
         # 镜面反射率查表 rho_spec = F0*A + B；N.V 固定为 1，保证每个高斯点只有一个发射率
         A, B = lookup_spec_ab(roughness, torch.ones_like(roughness))
-        rho = (base_color + 0.04 * A + B).clamp(0, 1)
+        rho = (base_color * (1 - metallic) + F0 * A + B).clamp(0, 1)
         eps = 1.0 - rho
     elif emissivity_mode == "auto" and emissivity is None:
         transport_unit = incident_areas * n_d_i
@@ -502,6 +519,7 @@ def rendering_equation(base_color, roughness, normals, viewdirs,
         "diffuse_light": diffuse_light,
         "specular": specular,
         "emission": emit,  # 中文注释：为后续栅格化提供仅热辐射特征（3通道）
+        "metalness": metallic,
     }
 
     return pbr, extra_results
@@ -531,7 +549,8 @@ def GGX_specular(
     alpha2 = alpha * alpha  # [nrays, 3]
     k = (alpha + 2 * roughness + 1.0) / 8.0
     FMi = ((-5.55473) * VoH - 6.98316) * VoH
-    frac0 = fresnel + (1 - fresnel) * torch.pow(2.0, FMi)  # [nrays, nlights, 3]
+    F0 = fresnel[:, None, :] if isinstance(fresnel, torch.Tensor) and fresnel.dim() == 2 else fresnel
+    frac0 = F0 + (1 - F0) * torch.pow(2.0, FMi)  # [nrays, nlights, 3]
     
     frac = frac0 * alpha2[:, None, :]  # [nrays, 1]
     nom0 = NoH * NoH * (alpha2[:, None, :] - 1) + 1
