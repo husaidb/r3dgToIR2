@@ -138,7 +138,7 @@ class OptimizationParams(ParamGroup):
         self.metallic_from_model = False
 
         # 逐点发射率区间软约束（作用在 eps = 1 - rho 上，按 metalness 软加权）
-        self.lambda_material_prior = 0.0
+        self.lambda_material_prior = 0.01
         self.eps_metal_min = 0.05
         self.eps_metal_max = 0.65
         self.eps_diel_min = 0.65
