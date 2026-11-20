@@ -132,7 +132,6 @@ class OptimizationParams(ParamGroup):
         self.lambda_visibility_smooth = 0.0
         self.lambda_visibility = 0.0
         self.lambda_env_smooth = 0.0
-        self.lambda_emission_constraint = 0.0
 
         self.metallic = 0.0
         self.material_prob_path = ""   # 必须默认空串，不能写 None：ParamGroup 用 type(默认值) 注册 CLI

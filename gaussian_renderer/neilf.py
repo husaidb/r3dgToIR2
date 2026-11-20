@@ -287,13 +287,6 @@ def calculate_loss(viewpoint_camera, pc, results, opt, direct_light_env_light):
         tb_dict["loss_emission_sep"] = loss_emission_sep.item()
         loss = loss + lambda_emission_sep * loss_emission_sep
 
-    lambda_emission_constraint = getattr(opt, "lambda_emission_constraint", 0.0)
-    if (lambda_emission_constraint > 0) and (rendered_emission is not None):
-        emission_clamped = rendered_emission.clamp(0.6, 0.9)
-        loss_emission_constraint = F.l1_loss(rendered_emission, emission_clamped)
-        tb_dict["loss_emission_constraint"] = loss_emission_constraint.item()
-        loss = loss + lambda_emission_constraint * loss_emission_constraint
-
     if opt.lambda_depth > 0:
         gt_depth = viewpoint_camera.depth.cuda()
         image_mask = viewpoint_camera.image_mask.cuda().bool()
