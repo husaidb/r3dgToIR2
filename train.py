@@ -81,6 +81,10 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
                     np.load(args.material_prob_path)).float().cuda()
             pbr_kwargs["metallic"] = getattr(args, "metallic", 0.0)
             pbr_kwargs["metallic_from_model"] = getattr(args, "metallic_from_model", False)
+            pbr_kwargs["eps_metal_min"] = args.eps_metal_min
+            pbr_kwargs["eps_metal_max"] = args.eps_metal_max
+            pbr_kwargs["eps_diel_min"] = args.eps_diel_min
+            pbr_kwargs["eps_diel_max"] = args.eps_diel_max
 
     """ Prepare render function and bg"""
     render_fn = render_fn_dict[args.type]

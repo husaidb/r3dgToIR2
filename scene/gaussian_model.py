@@ -48,7 +48,7 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
         if self.use_pbr:
-            self.base_color_activation = lambda x: torch.sigmoid(x) * 0.77 + 0.03
+            self.base_color_activation = lambda x: torch.sigmoid(x) * 0.92 + 0.03
             self.roughness_activation = lambda x: torch.sigmoid(x) * 0.9 + 0.09
             self.inverse_roughness_activation = lambda y: inverse_sigmoid((y-0.09) / 0.9)
 

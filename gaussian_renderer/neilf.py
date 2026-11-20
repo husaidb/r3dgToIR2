@@ -136,6 +136,21 @@ def render_view(viewpoint_camera: Camera, pc: GaussianModel, pipe, bg_color: tor
         extra_results = {k: torch.cat([_extra_results[k] for _extra_results in extra_results], dim=0) for k in extra_results[0]}
         torch.cuda.empty_cache()
 
+    # 材质先验：逐点 eps 的区间软约束，金属/介电分支按 metalness 软加权（背景 metalness=0，走介电区间）
+    material_prior = None
+    if is_training and ("emissivity" in extra_results):
+        eps_pt = extra_results["emissivity"].mean(dim=-1, keepdim=True)  # [N,1]
+
+        def _interval_hinge(e, lo, hi):
+            return F.relu(lo - e).pow(2) + F.relu(e - hi).pow(2)
+
+        material_prior = (
+            metallic * _interval_hinge(eps_pt, dict_params.get("eps_metal_min", 0.05),
+                                       dict_params.get("eps_metal_max", 0.65))
+            + (1 - metallic) * _interval_hinge(eps_pt, dict_params.get("eps_diel_min", 0.65),
+                                               dict_params.get("eps_diel_max", 0.98))
+        ).mean()
+
     xyz_homo = torch.cat([means3D, torch.ones_like(means3D[:, :1])], dim=-1)
     depths = (xyz_homo @ viewpoint_camera.world_view_transform)[:, 2:3]
     depths2 = depths.square()
@@ -226,6 +241,8 @@ def render_view(viewpoint_camera: Camera, pc: GaussianModel, pipe, bg_color: tor
 
     results.update(feature_dict)
     results["diffuse_light"] = extra_results["diffuse_light"]
+    if material_prior is not None:
+        results["material_prior_loss"] = material_prior
     try:
         results["env"] = direct_light_env_light.get_env
     except:
@@ -286,6 +303,12 @@ def calculate_loss(viewpoint_camera, pc, results, opt, direct_light_env_light):
         loss_emission_sep = F.l1_loss(reflect_only_pred, reflect_only_gt)
         tb_dict["loss_emission_sep"] = loss_emission_sep.item()
         loss = loss + lambda_emission_sep * loss_emission_sep
+
+    lambda_material_prior = getattr(opt, "lambda_material_prior", 0.0)
+    material_prior = results.get("material_prior_loss", None)
+    if (lambda_material_prior > 0) and (material_prior is not None):
+        tb_dict["loss_material_prior"] = material_prior.item()
+        loss = loss + lambda_material_prior * material_prior
 
     if opt.lambda_depth > 0:
         gt_depth = viewpoint_camera.depth.cuda()
@@ -514,6 +537,8 @@ def rendering_equation(base_color, roughness, normals, viewdirs,
         "emission": emit,  # 中文注释：为后续栅格化提供仅热辐射特征（3通道）
         "metalness": metallic,
     }
+    if eps is not None and eps.dim() == 2:
+        extra_results["emissivity"] = eps
 
     return pbr, extra_results
 
