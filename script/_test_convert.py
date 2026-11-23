@@ -142,6 +142,25 @@ def test_non_pinhole_text():
             check("non-pinhole text error", False, "没有抛 ValueError")
 
 
+def test_cli_utf8_output():
+    import subprocess
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        sparse, images = write_text_fixture(
+            tmp, write_gray16, cameras=["1 SIMPLE_RADIAL 8 6 10 4 3 0.0"])
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONIOENCODING"}
+        r = subprocess.run(
+            [sys.executable, os.path.join(REPO, "script", "convert_colmap_to_blender.py"),
+             "--sparse", sparse, "--images", images, "--out", os.path.join(tmp, "out")],
+            capture_output=True, env=env)
+        try:
+            text = r.stdout.decode("utf-8")
+        except UnicodeDecodeError as e:
+            check("cli utf8", False, str(e))
+            return
+        check("cli utf8", r.returncode == 1 and "[ERROR]" in text and "PINHOLE" in text,
+              text[-200:])
+
+
 def test_reader_guard(out):
     try:
         from scene.dataset_readers import readNerfSyntheticInfo
@@ -156,6 +175,7 @@ def main():
     test_main_fixture()
     test_rgba_drops_alpha()
     test_non_pinhole_text()
+    test_cli_utf8_output()
     print(f"\nFAILURES: {len(failures)}")
     sys.exit(1 if failures else 0)
 

@@ -177,6 +177,8 @@ def convert_colmap_to_blender(sparse_dir, images_dir, out_dir):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="COLMAP sparse → Blender 格式")
     parser.add_argument("--sparse", required=True, help="含 cameras/images/points3D 的目录")
     parser.add_argument("--images", required=True, help="原始图片目录")

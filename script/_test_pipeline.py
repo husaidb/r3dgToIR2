@@ -286,6 +286,22 @@ def test_missing_masks():
         check("masks message", "masks_ir" in out and "--auto_mask" in out, out[-400:])
 
 
+def test_utf8_output_without_env():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        ds, work = Path(tmp) / "ds", Path(tmp) / "work"
+        make_blender_root(ds / "kettle")
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONIOENCODING"}
+        cmd = [sys.executable, "script/run_pipeline.py", "--dataset_root", str(ds),
+               "--work_root", str(work), "-d", "kettle", "--dry_run"]
+        r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, env=env)
+        try:
+            text = r.stdout.decode("utf-8")
+        except UnicodeDecodeError as e:
+            check("utf8 pipeline", False, str(e))
+            return
+        check("utf8 pipeline", "温度" in text and r.returncode != 0, text[-200:])
+
+
 def main():
     test_detect_input()
     test_resolve_paths()
@@ -297,6 +313,7 @@ def main():
     test_cli_dry_run()
     test_missing_temperature()
     test_missing_masks()
+    test_utf8_output_without_env()
     print(f"\nFAILURES: {len(failures)}")
     sys.exit(1 if failures else 0)
 

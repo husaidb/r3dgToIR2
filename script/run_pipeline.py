@@ -379,6 +379,8 @@ def _run(args) -> int:
 
 
 def main(argv=None) -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
     try:
         return _run(args)
