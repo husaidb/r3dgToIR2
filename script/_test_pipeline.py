@@ -172,6 +172,22 @@ def test_masks():
         check("masks none", rp.resolve_masks_dir(Path(tmp) / "x", Path(tmp) / "y") is None)
 
 
+def test_prepare_is_complete():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        prob, ckpt = Path(tmp) / "metal_prob.npy", Path(tmp) / "chkpnt30000.pth"
+        check("prepare missing", not rp.prepare_is_complete(prob, ckpt))
+        touch(prob)
+        check("prepare no ckpt", rp.prepare_is_complete(prob, ckpt))
+        touch(ckpt)
+        os.utime(prob, (1_000_000_000, 1_000_000_000))
+        os.utime(ckpt, (2_000_000_000, 2_000_000_000))
+        check("prepare stale", not rp.prepare_is_complete(prob, ckpt))
+        os.utime(prob, (2_000_000_000, 2_000_000_000))
+        check("prepare same mtime", rp.prepare_is_complete(prob, ckpt))
+        os.utime(prob, (3_000_000_000, 3_000_000_000))
+        check("prepare fresh", rp.prepare_is_complete(prob, ckpt))
+
+
 def test_builders():
     d, o = Path("data"), Path("out")
     ckpt, prob = Path("ck.pth"), d / "material_prior" / "metal_prob.npy"
@@ -276,6 +292,7 @@ def main():
     test_resolve_sparse_dir()
     test_validate_input()
     test_masks()
+    test_prepare_is_complete()
     test_builders()
     test_cli_dry_run()
     test_missing_temperature()

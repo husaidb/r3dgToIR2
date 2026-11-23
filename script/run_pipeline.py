@@ -139,6 +139,16 @@ def masks_complete(data_dir: Path, masks_dir) -> bool:
     return {p.stem for p in _images(Path(masks_dir))} == expected_stems(data_dir)
 
 
+def prepare_is_complete(prob: Path, ckpt: Path) -> bool:
+    """prob 存在且不早于阶段一 checkpoint 才算完成；旧 prob 需重新生成。"""
+    prob, ckpt = Path(prob), Path(ckpt)
+    if not prob.is_file():
+        return False
+    if not ckpt.is_file():
+        return True
+    return prob.stat().st_mtime >= ckpt.stat().st_mtime
+
+
 def build_convert_cmd(sparse_dir, images_dir, out_dir) -> list:
     return [sys.executable, "script/convert_colmap_to_blender.py",
             "--sparse", str(sparse_dir), "--images", str(images_dir), "--out", str(out_dir)]
@@ -331,9 +341,11 @@ def _run(args) -> int:
     metal_kwargs = decide_metalness(args, paths, args.dry_run)
     check_confidence(args, metal_kwargs, args.dry_run)
 
-    if prob.is_file() and not args.force:
+    if not args.force and prepare_is_complete(prob, ckpt1):
         print(f"[SKIP] material_prior 已存在: {prob}")
     else:
+        if not args.dry_run and prob.is_file():
+            print(f"[INFO] {prob} 早于阶段一 checkpoint，重新生成")
         if not args.dry_run and not ckpt1.is_file():
             raise PipelineError(f"缺少阶段一 checkpoint: {ckpt1}（先跑阶段一或去掉 --skip_stage1）")
         run_step("prepare", build_prepare_cmd(
