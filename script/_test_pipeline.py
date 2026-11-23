@@ -1,6 +1,7 @@
 """端到端流水线纯逻辑的 CPU 测试：python script/_test_pipeline.py"""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -229,6 +230,46 @@ def test_builders():
                                and None not in c for c in all_cmds))
 
 
+def run_cli(tmp, extra):
+    ds, work = Path(tmp) / "ds", Path(tmp) / "work"
+    make_blender_root(ds / "kettle")
+    cmd = [sys.executable, "script/run_pipeline.py",
+           "--dataset_root", str(ds), "--work_root", str(work), "-d", "kettle"] + extra
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env)
+    return r, work
+
+
+def test_cli_dry_run():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        r, work = run_cli(tmp, ["--temperature", "30", "--auto_mask",
+                                "--metallic", "0.5", "--dry_run"])
+        out = r.stdout + r.stderr
+        check("dry rc", r.returncode == 0, out[-400:])
+        check("dry train", "train.py" in out)
+        check("dry lut", "--emissivity_mode" in out and "lut" in out)
+        check("dry masks", "generate_masks.py" in out)
+        check("dry prepare", "prepare_object_metalness.py" in out)
+        check("dry no work", not work.exists(), str(work))
+
+
+def test_missing_temperature():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        r, _ = run_cli(tmp, ["--auto_mask", "--metallic", "0.5", "--dry_run"])
+        out = r.stdout + r.stderr
+        check("temp rc", r.returncode != 0, out[-400:])
+        check("temp message", "temperature" in out or "温度" in out, out[-400:])
+
+
+def test_missing_masks():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        r, _ = run_cli(tmp, ["--temperature", "30", "--metallic", "0.5", "--dry_run"])
+        out = r.stdout + r.stderr
+        check("masks rc", r.returncode != 0, out[-400:])
+        check("masks message", "masks_ir" in out and "--auto_mask" in out, out[-400:])
+
+
 def main():
     test_detect_input()
     test_resolve_paths()
@@ -236,6 +277,9 @@ def main():
     test_validate_input()
     test_masks()
     test_builders()
+    test_cli_dry_run()
+    test_missing_temperature()
+    test_missing_masks()
     print(f"\nFAILURES: {len(failures)}")
     sys.exit(1 if failures else 0)
 

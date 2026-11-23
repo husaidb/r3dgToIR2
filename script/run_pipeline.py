@@ -6,6 +6,12 @@
 输入只读，产物全部落在 --work_root/<scene>/ 下。
 """
 import argparse
+import collections
+import json
+import os
+import shlex
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -201,9 +207,172 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
-    build_parser().parse_args(argv)
+def run_step(name: str, cmd, log_dir: Path, dry_run: bool = False) -> None:
+    if dry_run:
+        print(f"[DRY_RUN] {name}: {shlex.join(cmd)}")
+        return
+    log_dir = Path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{name}.log"
+    print(f"[STEP] {name}")
+    tail = collections.deque(maxlen=40)
+    child_env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    with open(log_path, "w", encoding="utf-8") as log:
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True,
+                                encoding="utf-8", errors="replace", env=child_env)
+        for line in proc.stdout:
+            print(line, end="")
+            log.write(line)
+            tail.append(line)
+        rc = proc.wait()
+    if rc != 0:
+        print("".join(tail))
+        raise PipelineError(f"{name} 失败（exit {rc}），日志: {log_path}")
+
+
+def copy_training_files(src: Path, data_dir: Path, dry_run: bool) -> None:
+    if dry_run:
+        print(f"[DRY_RUN] copy: {src} -> {data_dir}")
+        return
+    data_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src / "transforms_train.json", data_dir / "transforms_train.json")
+    shutil.copy2(src / "points3d.ply", data_dir / "points3d.ply")
+    shutil.copytree(src / "train", data_dir / "train", dirs_exist_ok=True)
+
+
+def read_meta(path: Path) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def decide_metalness(args, paths: Paths, dry_run: bool) -> dict:
+    """返回 build_prepare_cmd 的 metallic / scene_meta 二选一参数。"""
+    if args.metallic is not None:
+        print(f"[INFO] 物体 metalness 来自 --metallic: {args.metallic}")
+        return {"metallic": args.metallic}
+    for cand in (paths.meta_path, paths.scene_dir / "scene_meta.json"):
+        if cand.is_file():
+            print(f"[INFO] 物体 metalness 来自 {cand}")
+            return {"scene_meta": str(cand)}
+    visible = paths.scene_dir / "visible"
+    if visible.is_dir() and any(visible.iterdir()):
+        run_step("vlm", build_vlm_cmd(paths.scene_dir, paths.meta_path, args.vlm_model),
+                 paths.log_dir, dry_run)
+        return {"scene_meta": str(paths.meta_path)}
+    raise PipelineError(
+        "无法确定物体 metalness：给 --metallic、提供 scene_meta.json，"
+        "或在 <scene>/visible/ 放可见光照片让 VLM 判断")
+
+
+def check_confidence(args, metal_kwargs: dict, dry_run: bool) -> None:
+    meta_path = metal_kwargs.get("scene_meta")
+    if not meta_path or not Path(meta_path).is_file():
+        return
+    meta = read_meta(Path(meta_path))
+    conf = float(meta.get("confidence", 1.0))
+    if conf >= 0.5:
+        return
+    msg = f"[WARN] scene_meta 置信度低 {conf:.2f}（metallic={meta.get('metallic')}）：{meta_path}"
+    if args.strict_vlm:
+        raise PipelineError(msg)
+    print(msg)
+
+
+def _run(args) -> int:
+    paths = resolve_paths(Path(args.dataset_root), Path(args.work_root), args.dataset)
+    kind = detect_input(paths.scene_dir)
+    validate_input(paths, kind)
+    print(f"[INFO] 输入形态: {kind}，场景: {paths.scene_dir}")
+
+    if not args.skip_stage2 and args.temperature is None:
+        raise PipelineError("阶段二需要 --temperature（物体温度 °C）；只跑阶段一请加 --skip_stage2")
+
+    ckpt1 = paths.stage1_dir / "chkpnt30000.pth"
+    prob = paths.data_dir / "material_prior" / "metal_prob.npy"
+
+    if (paths.data_dir / "transforms_train.json").is_file() and not args.force:
+        print(f"[SKIP] data 已存在: {paths.data_dir}")
+    elif kind == "colmap":
+        raw = paths.scene_dir / "raw"
+        run_step("convert", build_convert_cmd(resolve_sparse_dir(raw), raw / "images",
+                                              paths.data_dir), paths.log_dir, args.dry_run)
+    else:
+        src = paths.scene_dir if kind == "blender_root" else paths.scene_dir / "raw"
+        copy_training_files(src, paths.data_dir, args.dry_run)
+
+    if not args.dry_run and (paths.data_dir / "sparse").exists():
+        raise PipelineError(f"{paths.data_dir / 'sparse'} 存在：训练会走 COLMAP 读取器，"
+                            "请确认并移除该目录（流水线不会自动删除）")
+
+    if args.skip_stage1:
+        print("[SKIP] stage1 (--skip_stage1)")
+    elif ckpt1.is_file() and not args.force:
+        print(f"[SKIP] stage1 已完成: {ckpt1}")
+    else:
+        run_step("stage1", build_stage1_cmd(paths.data_dir, paths.stage1_dir),
+                 paths.log_dir, args.dry_run)
+
+    masks_dir = resolve_masks_dir(paths.scene_dir, paths.work_dir)
+    if masks_dir is not None and masks_complete(paths.data_dir, masks_dir) and not args.force:
+        print(f"[SKIP] mask 已完成: {masks_dir}")
+    elif args.auto_mask:
+        run_step("masks", build_generate_masks_cmd(paths.work_dir, paths.data_dir),
+                 paths.log_dir, args.dry_run)
+        masks_dir = paths.work_dir / "masks_ir"
+        if not args.dry_run and not masks_complete(paths.data_dir, masks_dir):
+            raise PipelineError(f"mask 生成后仍与 train/ 不一一对应: {masks_dir}")
+    elif masks_dir is not None:
+        raise PipelineError(f"{masks_dir} 中 mask 与 train/ 不一一对应；补齐 mask 或加 --auto_mask 重新生成")
+    else:
+        raise PipelineError("没有 mask：把每视角 mask 放到 <scene>/masks_ir/（文件名=图片 stem），"
+                            "或加 --auto_mask 用 rembg 生成")
+
+    metal_kwargs = decide_metalness(args, paths, args.dry_run)
+    check_confidence(args, metal_kwargs, args.dry_run)
+
+    if prob.is_file() and not args.force:
+        print(f"[SKIP] material_prior 已存在: {prob}")
+    else:
+        if not args.dry_run and not ckpt1.is_file():
+            raise PipelineError(f"缺少阶段一 checkpoint: {ckpt1}（先跑阶段一或去掉 --skip_stage1）")
+        run_step("prepare", build_prepare_cmd(
+            paths.data_dir, paths.prep_dir, ckpt1, masks_dir,
+            paths.data_dir / "material_prior", args.erode, **metal_kwargs),
+            paths.log_dir, args.dry_run)
+
+    ckpt2 = paths.stage2_dir / "chkpnt30000.pth"
+    if args.skip_stage2:
+        print("[SKIP] stage2 (--skip_stage2)")
+    elif ckpt2.is_file() and not args.force:
+        print(f"[SKIP] stage2 已完成: {ckpt2}")
+    else:
+        if not args.dry_run:
+            if (paths.data_dir / "sparse").exists():
+                raise PipelineError(f"{paths.data_dir / 'sparse'} 存在，拒绝训练")
+            if not ckpt1.is_file():
+                raise PipelineError(f"缺少阶段一 checkpoint: {ckpt1}")
+            if not prob.is_file():
+                raise PipelineError(f"缺少 {prob}（先跑 prepare_object_metalness）")
+        run_step("stage2", build_stage2_cmd(paths.data_dir, paths.stage2_dir, ckpt1, prob,
+                                            args.temperature), paths.log_dir, args.dry_run)
+
+    print(f"[INFO] 产物目录: {paths.work_dir}")
+    stats = paths.data_dir / "material_prior" / "metal_prior_stats.json"
+    if stats.is_file():
+        print("[INFO] metal_prior_stats.json:",
+              json.dumps(read_meta(stats), ensure_ascii=False)[:400])
+    print(f"[INFO] TensorBoard: tensorboard --logdir {paths.work_dir}")
     return 0
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return _run(args)
+    except PipelineError as e:
+        print("[ERROR]", e)
+        return 2
 
 
 if __name__ == "__main__":
