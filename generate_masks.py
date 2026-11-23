@@ -5,14 +5,15 @@ import rembg
 from tqdm import tqdm
 import io
 
-def create_masks(source_path):
+def create_masks(source_path, images_dir=None, masks_dir=None):
     """
     为给定的源路径中的图像生成掩码。
-    读取 'images' 文件夹，并将生成的掩码保存到 'masks' 文件夹。
+    默认读取 '<source_path>/images'，掩码保存到 '<source_path>/masks'；
+    images_dir / masks_dir 可覆盖这两个路径。
     """
     # 定义输入和输出文件夹的路径
-    image_dir = os.path.join(source_path, "images")
-    mask_dir = os.path.join(source_path, "masks")
+    image_dir = images_dir or os.path.join(source_path, "images")
+    mask_dir = masks_dir or os.path.join(source_path, "masks")
 
     # 检查输入文件夹是否存在
     if not os.path.exists(image_dir):
@@ -56,8 +57,10 @@ if __name__ == "__main__":
     # 设置命令行参数解析
     parser = argparse.ArgumentParser(description="使用 rembg 为图像数据集生成掩码。")
     parser.add_argument("-s", "--source_path", type=str, required=True, help="包含 'images' 文件夹的数据集源路径。")
-    
+    parser.add_argument("--images_dir", type=str, default="", help="输入图像目录，默认 <source>/images")
+    parser.add_argument("--masks_dir", type=str, default="", help="输出掩码目录，默认 <source>/masks")
+
     args = parser.parse_args()
-    
+
     # 运行主函数
-    create_masks(args.source_path)
+    create_masks(args.source_path, args.images_dir or None, args.masks_dir or None)
