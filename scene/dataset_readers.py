@@ -15,6 +15,7 @@ from scene.gaussian_model import BasicPointCloud
 from tqdm import tqdm
 import cv2
 from scene.utils import load_img_rgb, load_mask_bool, load_depth, load_pfm
+from utils.mask_utils import load_colmap_foreground_mask
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -108,11 +109,9 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, debug=False
         image_name = os.path.basename(image_path).split(".")[0]
         image = load_img_rgb(image_path)
 
-        mask_path = os.path.join(os.path.dirname(images_folder), "masks", os.path.basename(extr.name))
-        if os.path.exists(mask_path):
-            mask = 1.0 - load_mask_bool(mask_path) / 255
-        else:
-            mask = np.ones_like(image[:, :, 0])
+        # 前景 mask：白=前景=1；背景乘 0（黑）。缺 mask 时全 1，不抠背景。
+        mask = load_colmap_foreground_mask(images_folder, os.path.basename(extr.name),
+                                           image.shape[0], image.shape[1])
         image = image * mask[..., np.newaxis]
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovX=Fovx, FovY=FovY, fx=focal_length_x, fy=focal_length_y, cx=ppx,
                               cy=ppy, image=image, image_path=image_path, image_name=image_name, width=width, height=height,
