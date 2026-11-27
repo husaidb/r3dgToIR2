@@ -26,8 +26,13 @@ def sample_brdf_to_txt(
     phi_o=np.pi,
     max_theta=np.deg2rad(80.0),
     signed_scan=False,
+    metallic=0.0,
 ):
     device = torch.device("cpu")
+
+    metallic = float(metallic)
+    if not (0.0 <= metallic <= 1.0):
+        raise ValueError(f"metallic 必须在 [0, 1] 范围内，当前为: {metallic}")
 
     base_color = torch.tensor(base_color, dtype=torch.float32, device=device).view(1, 3)
     roughness = float(roughness)
@@ -41,7 +46,10 @@ def sample_brdf_to_txt(
     else:
         scan_thetas = np.linspace(0.0, max_theta, num_dirs)
 
-    fresnel = 0.04
+    # 与 gaussian_renderer/neilf.py 保持一致的 Disney/glTF 金属工作流：
+    # F0 = 0.04 * (1 - m) + base_color * m, f_d = base_color * (1 - m) / pi
+    f0 = 0.04 * (1.0 - metallic) + base_color * metallic  # [1, 3]
+    diffuse_color = base_color * (1.0 - metallic)          # [1, 3]
 
     if scan_mode == "incoming":
         N = torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float32, device=device)
@@ -53,13 +61,13 @@ def sample_brdf_to_txt(
         dirs = torch.tensor(np.stack(dirs, axis=0), dtype=torch.float32, device=device)
         incident_dirs = dirs.unsqueeze(0)
 
-        f_d = base_color.unsqueeze(1) / np.pi
+        f_d = diffuse_color.unsqueeze(1) / np.pi
         f_s = GGX_specular(
             normal=N,
             pts2c=V,
             pts2l=incident_dirs,
             roughness=roughness_tensor,
-            fresnel=fresnel,
+            fresnel=f0,
         )
         brdf = f_d + f_s
         brdf_np = brdf.squeeze(0).cpu().numpy()
@@ -75,13 +83,14 @@ def sample_brdf_to_txt(
         incident_dirs = L_single.view(1, 1, 3).repeat(num_dirs, 1, 1)
 
         roughness_rep = torch.full((num_dirs, 3), roughness, dtype=torch.float32, device=device)
-        f_d = base_color.repeat(num_dirs, 1).unsqueeze(1) / np.pi
+        f0_rep = f0.repeat(num_dirs, 1)
+        f_d = diffuse_color.repeat(num_dirs, 1).unsqueeze(1) / np.pi
         f_s = GGX_specular(
             normal=N,
             pts2c=V,
             pts2l=incident_dirs,
             roughness=roughness_rep,
-            fresnel=fresnel,
+            fresnel=f0_rep,
         )
         brdf = f_d + f_s
         brdf_np = brdf.squeeze(1).cpu().numpy()
@@ -110,7 +119,10 @@ def sample_brdf_to_txt(
             )
             f.write(line)
 
-    print(f"BRDF samples written to: {out_path}")
+    print(
+        f"BRDF samples written to: {out_path} "
+        f"(base_color={base_color.squeeze(0).tolist()}, roughness={roughness:.4f}, metallic={metallic:.4f})"
+    )
 
 
 def sample_brdf_for_gaussian(
@@ -126,9 +138,13 @@ def sample_brdf_for_gaussian(
     phi_o=np.pi,
     max_theta=np.deg2rad(80.0),
     signed_scan=False,
+    metallic=None,
+    material_prob_path=None,
 ):
     if checkpoint_path is None and ply_path is None:
         raise ValueError("checkpoint_path 或 ply_path 至少提供一个")
+    if metallic is not None and material_prob_path is not None:
+        raise ValueError("metallic 与 material_prob_path 不能同时指定，请二选一")
 
     gaussians = GaussianModel(sh_degree=3, render_type="neilf")
 
@@ -139,9 +155,22 @@ def sample_brdf_for_gaussian(
 
     base_color_all = gaussians.get_base_color.detach().cpu().numpy()
     roughness_all = gaussians.get_roughness.detach().cpu().numpy()
+    num_gaussians = base_color_all.shape[0]
 
-    if index < 0 or index >= base_color_all.shape[0]:
-        raise IndexError(f"index 超出范围: 0 <= index < {base_color_all.shape[0]}")
+    if index < 0 or index >= num_gaussians:
+        raise IndexError(f"index 超出范围: 0 <= index < {num_gaussians}")
+
+    if material_prob_path is not None:
+        metal_prob = np.load(material_prob_path).reshape(-1)
+        if metal_prob.shape[0] != num_gaussians:
+            raise ValueError(
+                f"metal_prob 长度 ({metal_prob.shape[0]}) 与模型高斯点数量 ({num_gaussians}) 不一致"
+            )
+        metallic_val = float(metal_prob[index])
+    elif metallic is not None:
+        metallic_val = float(metallic)
+    else:
+        metallic_val = 0.0
 
     base_color = base_color_all[index].tolist()
     roughness = float(roughness_all[index, 0])
@@ -158,6 +187,7 @@ def sample_brdf_for_gaussian(
         phi_o=phi_o,
         max_theta=max_theta,
         signed_scan=signed_scan,
+        metallic=metallic_val,
     )
 
 
@@ -170,6 +200,13 @@ if __name__ == "__main__":
     parser.add_argument("--num_dirs", type=int, default=100)
     parser.add_argument("--base_color", type=float, nargs=3, default=None)
     parser.add_argument("--roughness", type=float, default=None)
+    parser.add_argument("--metallic", type=float, default=None, help="标量金属度 m ∈ [0, 1]（默认 0.0）")
+    parser.add_argument(
+        "--material_prob_path",
+        type=str,
+        default=None,
+        help="逐高斯金属度文件（如 metal_prob.npy），按 --index 自动读取",
+    )
     parser.add_argument("--scan_mode", type=str, default="incoming", choices=["incoming", "outgoing"])
     parser.add_argument("--theta_i", type=float, default=0.0)
     parser.add_argument("--phi_i", type=float, default=0.0)
@@ -193,10 +230,14 @@ if __name__ == "__main__":
             phi_o=args.phi_o,
             max_theta=args.max_theta,
             signed_scan=args.signed_scan,
+            metallic=args.metallic,
+            material_prob_path=args.material_prob_path,
         )
     else:
         if args.base_color is None or args.roughness is None:
             raise ValueError("未提供模型路径时，必须指定 base_color 和 roughness")
+        if args.material_prob_path is not None:
+            raise ValueError("未提供模型路径时无法按索引使用 --material_prob_path，请改用 --metallic")
         sample_brdf_to_txt(
             base_color=args.base_color,
             roughness=args.roughness,
@@ -209,4 +250,5 @@ if __name__ == "__main__":
             phi_o=args.phi_o,
             max_theta=args.max_theta,
             signed_scan=args.signed_scan,
+            metallic=0.0 if args.metallic is None else args.metallic,
         )
