@@ -44,6 +44,7 @@ class ModelParams(ParamGroup):
         self._images = "images"
         self._resolution = -1
         self._white_background = False
+        self.apply_fg_mask = False
         self.data_device = "cuda"
         self.eval = False
         self.debug_cuda = False

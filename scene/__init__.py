@@ -40,9 +40,10 @@ class Scene:
 
         self.train_cameras = {}
         self.test_cameras = {}
+        apply_fg_mask = getattr(args, "apply_fg_mask", False)
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval,
-                                                          debug=args.debug_cuda)
+                                                          debug=args.debug_cuda, apply_fg_mask=apply_fg_mask)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             if "stanford_orb" in args.source_path:
                 print("Found keyword stanford_orb, assuming Stanford ORB data set!")
@@ -55,11 +56,11 @@ class Scene:
             else:
                 print("Found transforms_train.json file, assuming Blender data set!")
                 scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval, 
-                                                               debug=args.debug_cuda)
+                                                               debug=args.debug_cuda, apply_fg_mask=apply_fg_mask)
         elif os.path.exists(os.path.join(args.source_path, "inputs/sfm_scene.json")):
             print("Found sfm_scene.json file, assuming NeILF data set!")
             scene_info = sceneLoadTypeCallbacks["NeILF"](args.source_path, args.white_background, args.eval,
-                                                         debug=args.debug_cuda)
+                                                         debug=args.debug_cuda, apply_fg_mask=apply_fg_mask)
         else:
             assert False, "Could not recognize scene type!"
 

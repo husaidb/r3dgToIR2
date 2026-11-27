@@ -68,8 +68,11 @@ def getNerfppNorm(cam_info):
     return {"translate": translate, "radius": radius}
 
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, debug=False):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, debug=False, apply_fg_mask=False):
     cam_infos = []
+    masks_dir = os.path.join(os.path.dirname(images_folder), "masks")
+    if (not apply_fg_mask) and os.path.isdir(masks_dir):
+        print(f"[INFO] Found {masks_dir}, but --apply_fg_mask is False; keeping full-scene background.")
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
         # the exact output you're looking for:
@@ -110,10 +113,13 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, debug=False
         image_name = os.path.basename(image_path).split(".")[0]
         image = load_img_rgb(image_path)
 
-        # 前景 mask：白=前景=1；背景乘 0（黑）。缺 mask 时全 1，不抠背景。
-        mask = load_colmap_foreground_mask(images_folder, os.path.basename(extr.name),
-                                           image.shape[0], image.shape[1])
-        image = image * mask[..., np.newaxis]
+        # 仅当显式开启 --apply_fg_mask 时才按 masks/ 截断背景；默认全 1，保留完整场景背景。
+        if apply_fg_mask:
+            mask = load_colmap_foreground_mask(images_folder, os.path.basename(extr.name),
+                                               image.shape[0], image.shape[1])
+            image = image * mask[..., np.newaxis]
+        else:
+            mask = np.ones((image.shape[0], image.shape[1]), dtype=np.float32)
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovX=Fovx, FovY=FovY, fx=focal_length_x, fy=focal_length_y, cx=ppx,
                               cy=ppy, image=image, image_path=image_path, image_name=image_name, width=width, height=height,
                               image_mask=mask)
@@ -143,7 +149,7 @@ def fetchPly(path):
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
 
-def readColmapSceneInfo(path, images, eval, llffhold=8, debug=False):
+def readColmapSceneInfo(path, images, eval, llffhold=8, debug=False, apply_fg_mask=False):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -158,7 +164,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, debug=False):
     reading_dir = "images" if images is None else images
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
                                            images_folder=os.path.join(path, reading_dir),
-                                           debug=debug)
+                                           debug=debug, apply_fg_mask=apply_fg_mask)
     cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
 
     if "DTU" in path and not debug:
@@ -196,7 +202,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, debug=False):
     return scene_info
 
 
-def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png", debug=False):
+def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png", debug=False, apply_fg_mask=False):
     cam_infos = []
 
     read_mvs = False
@@ -229,8 +235,11 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             image_mask = np.ones_like(image[..., 0])
             if image.shape[-1] == 4:
-                image_mask = image[:, :, 3]
-                image = image[:, :, :3] * image[:, :, 3:4] + bg * (1 - image[:, :, 3:4])
+                if apply_fg_mask:
+                    image_mask = image[:, :, 3]
+                    image = image[:, :, :3] * image[:, :, 3:4] + bg * (1 - image[:, :, 3:4])
+                else:
+                    image = image[:, :, :3]
 
             # read depth and mask
             depth = None
@@ -256,13 +265,14 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
     return cam_infos
 
 
-def readNerfSyntheticInfo(path, white_background, eval, extension=".png", debug=False):
+def readNerfSyntheticInfo(path, white_background, eval, extension=".png", debug=False, apply_fg_mask=False):
     print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension, debug=debug)
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension,
+                                                debug=debug, apply_fg_mask=apply_fg_mask)
     if eval:
         print("Reading Test Transforms")
         test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension,
-                                                   debug=debug)
+                                                   debug=debug, apply_fg_mask=apply_fg_mask)
     else:
         test_cam_infos = []
 
@@ -296,7 +306,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png", debug=
     return scene_info
 
 
-def loadCamsFromScene(path, valid_list, white_background, debug):
+def loadCamsFromScene(path, valid_list, white_background, debug, apply_fg_mask=False):
     with open(f'{path}/sfm_scene.json') as f:
         sfm_scene = json.load(f)
 
@@ -341,10 +351,10 @@ def loadCamsFromScene(path, valid_list, white_background, debug):
 
             image = load_img_rgb(image_path)
             mask_path = os.path.join(path + "/pmasks/", os.path.basename(image_list[index]).replace(os.path.splitext(image_list[index])[-1], ".png"))
-            
-            if os.path.exists(mask_path):
+
+            if apply_fg_mask and os.path.exists(mask_path):
                 img_mask = load_mask_bool(mask_path)
-                # if pmask is available, mask the image for PSNR
+                # if pmask is available and apply_fg_mask is enabled, mask the image
                 image *= img_mask[..., np.newaxis]
             else:
                 img_mask = np.ones_like(image[:, :, 0])
@@ -352,14 +362,12 @@ def loadCamsFromScene(path, valid_list, white_background, debug):
             fovx = focal2fov(focal_length_x, image.shape[1])
             fovy = focal2fov(focal_length_y, image.shape[0])
             if int(index) in valid_list:
-                image *= img_mask[..., np.newaxis]
                 test_cam_infos.append(CameraInfo(uid=index, R=R, T=T, FovY=fovy, FovX=fovx, fx=focal_length_x,
                                                  fy=focal_length_y, cx=ppx, cy=ppy, image=image,
                                                  image_path=image_path, image_name=image_name,
                                                  image_mask=img_mask,
                                                  width=image.shape[1], height=image.shape[0]))
             else:
-                image *= img_mask[..., np.newaxis]
                 train_cam_infos.append(CameraInfo(uid=index, R=R, T=T, FovY=fovy, FovX=fovx, fx=focal_length_x,
                                                   fy=focal_length_y, cx=ppx, cy=ppy, image=image,
                                                   image_path=image_path, image_name=image_name,
@@ -371,7 +379,7 @@ def loadCamsFromScene(path, valid_list, white_background, debug):
     return train_cam_infos, test_cam_infos, bbox_transform
 
 
-def readNeILFInfo(path, white_background, eval, debug=False):
+def readNeILFInfo(path, white_background, eval, debug=False, apply_fg_mask=False):
     validation_indexes = []
     # if "data_dtu" in path:
     if True:
@@ -385,7 +393,7 @@ def readNeILFInfo(path, white_background, eval, debug=False):
         print("Reading Test transforms")
 
     train_cam_infos, test_cam_infos, bbx_trans = loadCamsFromScene(
-        f'{path}/inputs', validation_indexes, white_background, debug)
+        f'{path}/inputs', validation_indexes, white_background, debug, apply_fg_mask=apply_fg_mask)
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 

@@ -380,6 +380,7 @@ def calculate_loss(viewpoint_camera, pc, results, opt, direct_light_env_light):
         loss = loss + opt.lambda_env_smooth * loss_env_smooth
     
     if opt.lambda_normal_smooth > 0:
+        image_mask = viewpoint_camera.image_mask.cuda()
         # loss_normal_smooth = second_order_edge_aware_loss(rendered_normal * image_mask, gt_image)
         loss_normal_smooth = tv_loss(rendered_normal * image_mask)
         tb_dict["loss_normal_smooth"] = loss_normal_smooth.item()
